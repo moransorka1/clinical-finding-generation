@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+srg/
+
+# Credentials & secrets
+.env
+*.key
+*.pem
+*.json.credentials
+*credentials*.json
+neurology-copilot-credentials.json
+config.json
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Raw output data (large, re-generatable — not for reproduction)
+output/
+output_leakage/
+generated_output/
+
+# Log files
+*.log
+judge_*.log
+run_*.log
+*_run.log
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary / intermediate files
+*.tmp
+*.bak
+*.bak_final
+Rplots.pdf
+
+# R compiled
+*.Rhistory
+*.RData
+*.Rds
