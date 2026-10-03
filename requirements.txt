@@ -1,18 +1,19 @@
+# Python 3.12
+# Versions as used for the reported experiments.
+
 # Core
-python-dotenv==1.0.1
-tqdm==4.67.1
-sqlalchemy==2.0.36
+python-dotenv==1.2.1
+tqdm==4.67.3
+SQLAlchemy==2.0.46
 
 # LLM clients
-google-cloud-aiplatform==1.79.0
-anthropic==0.40.0
-boto3==1.35.86           # AWS Bedrock
-openai==1.61.0
+google-cloud-aiplatform==1.136.0   # Google Vertex AI (Gemini 2.5 Pro)
+boto3==1.35.86                     # AWS Bedrock (Claude Sonnet 4.6, Gemma3 12B, Qwen3 32B)
+openai==2.17.0                     # optional OpenAI and Azure clients
 
-# Web framework (for app_code only)
-fastapi==0.115.6
+# Web framework (src/app_code only)
+fastapi==0.128.5
 
-# Data processing
-pandas==2.2.3
-numpy==1.26.4
-scipy==1.14.1
+# Used by src/leakage_experiment/compare_experiments.py
+numpy==2.4.2
+matplotlib==3.10.8
