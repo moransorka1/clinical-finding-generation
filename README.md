@@ -1,23 +1,27 @@
-# Clinical Finding Generation — Reproduction Code
+# Clinical Finding Generation: Reproduction Code
 
-> Code for reproducing the experiments in:
+> Code for the experiments in:
 >
-> **"Clinical text from large language models describes diseases, not patients"**
-> Sorka M, Shalat A, Abu Husei R, Goldstein A, Aran D, Shelly S.
+> **"Clinical plausibility does not establish patient fidelity in generated clinical findings"**
+> Sorka M, Shalata A, Husein RA, Goldstein A, Aran D, Shelly S.
 
 ---
 
 ## Overview
 
-This repository implements the full experimental pipeline described in the paper. Four LLMs were given the complete clinical context of 127 published cases across six specialties and asked to generate one withheld clinical finding per entry (1,471 findings × 5 runs = 7,355 outputs per model, 29,388 total). Every output was then evaluated on two independent scales — ground-truth similarity and clinical plausibility — by all four models acting as judges (117,251 evaluations).
+This repository implements the generation and evaluation pipeline described in the paper.
+Four LLMs were given the clinical context of 127 published cases across six specialties and
+asked to generate one withheld clinical finding per entry. With 1,471 entries, five runs per
+entry and four generators this gives 29,420 generation attempts, of which 29,388 produced a
+valid output. Every output was then scored on two separate scales, ground-truth similarity
+and clinical plausibility, by all four models acting as judges, yielding 117,251 valid
+evaluations.
 
-The repository reproduces three complementary results:
-
-| Component | Script | Purpose |
-|-----------|--------|---------|
-| Baseline generation | `src/scripts/run_full_experiment.py` | Generate withheld findings; context **excludes** the target test |
-| Leakage control | `src/leakage_experiment/run_leakage_experiment.py` | Positive control; context **includes** the target test (validates that the GT-similarity metric detects context use) |
-| Multi-judge evaluation | `src/scripts/run_judge_evaluations.py` | Re-evaluate every output with all 4 judge models using separate similarity and plausibility prompts |
+| Component | Script |
+|-----------|--------|
+| Baseline generation; context **excludes** the target finding | `src/scripts/run_full_experiment.py` |
+| Answer-present control; context **includes** the target finding | `src/leakage_experiment/run_leakage_experiment.py` |
+| Multi-judge evaluation with all four judges | `src/scripts/run_judge_evaluations.py` |
 
 ---
 
@@ -31,18 +35,18 @@ clinical-finding-generation/
 │   ├── evaluation/
 │   │   └── metrics.py                        # GT similarity, plausibility, numeric comparison
 │   ├── extraction/
-│   │   ├── case_reconstructor.py             # Builds ablated case context (excludes target test)
+│   │   ├── case_reconstructor.py             # Builds ablated case context (excludes target finding)
 │   │   ├── test_extractor.py                 # Extracts test name from ground-truth entry
 │   │   └── context_ablator.py                # Legacy text-ablation fallback
 │   ├── leakage_experiment/
-│   │   ├── run_leakage_experiment.py         # Positive-control pipeline
+│   │   ├── run_leakage_experiment.py         # Answer-present control pipeline
 │   │   ├── merge_leakage_csvs.py             # Merge per-case CSVs
-│   │   └── compare_experiments.py            # Side-by-side baseline vs leakage comparison
+│   │   └── compare_experiments.py            # Side-by-side baseline vs answer-present comparison
 │   ├── llm/
 │   │   ├── client.py                         # Abstract base + model router
 │   │   ├── config.py                         # Model names and defaults
-│   │   ├── vertex_client.py                  # Google Vertex AI (Gemini, Gemma)
-│   │   ├── bedrock_client.py                 # AWS Bedrock (Claude Sonnet 4.6, Qwen3)
+│   │   ├── vertex_client.py                  # Google Vertex AI (Gemini 2.5 Pro)
+│   │   ├── bedrock_client.py                 # AWS Bedrock (Claude Sonnet 4.6, Gemma3 12B, Qwen3 32B)
 │   │   └── openai_client.py / azure_client.py
 │   ├── scripts/
 │   │   ├── run_full_experiment.py            # Main baseline experiment runner
@@ -55,118 +59,95 @@ clinical-finding-generation/
 
 ---
 
-## Pipeline Architecture
+## Pipeline
 
-The pipeline mirrors the Methods section of the paper exactly.
+### Stage 1, generate raw findings (`_step1_generate_realistic_results`)
 
-### Stage 1 — Generate raw findings (`_step1_generate_realistic_results`)
+The generator receives the confirmed diagnosis, the case text with the target finding
+removed, and the test, imaging study or examination to perform. Output is structured JSON
+with raw findings (values, units, reference ranges).
 
-The generator receives:
-- Confirmed diagnosis
-- Full case text (with the target test result removed)
-- The test/imaging/examination to perform
+### Stage 2, format and sanitize (`_step2_format_and_sanitize`)
 
-Output: structured JSON with raw findings (values, units, reference ranges).
+An independent LLM call formats the raw findings as a table (laboratory), a list, or
+narrative text (imaging, examination), and strips diagnostic conclusions
+("consistent with...", "indicates...") while preserving the objective findings.
 
-### Stage 2 — Format and sanitize (`_step2_format_and_sanitize`)
-
-An independent LLM call takes the raw findings and:
-- Formats results as table (labs), list, or narrative (imaging/exam)
-- Strips diagnostic conclusions ("consistent with…", "indicates…") while preserving objective findings
-
-### Evaluation (calls 3–5 per entry)
+### Evaluation (calls 3 to 5 per entry)
 
 | Call | Method | Input | Scores |
 |------|--------|-------|--------|
-| call_3 | Numeric extraction (LLM) | GT text + generated text | Paired numeric values for deterministic comparison |
-| call_4 | `_evaluate_similarity_with_llm` | GT + generated | GT similarity (1–5) + data leakage (bool) |
-| call_5 | `_evaluate_plausibility_with_llm` | Generated only (no GT) | Clinical plausibility (1–5) |
+| call_3 | `metrics._extract_numeric_from_both_with_llm` | documented + generated | Paired numeric values for deterministic comparison |
+| call_4 | `metrics._evaluate_similarity_with_llm` | documented + generated | GT similarity (1 to 5) + leakage flag |
+| call_5 | `metrics._evaluate_plausibility_with_llm` | generated only | Clinical plausibility (1 to 5) |
 
-Separating calls 4 and 5 ensures the plausibility judge never sees the ground-truth finding, which is the design described in the paper.
+Separating calls 4 and 5 keeps the plausibility judge from seeing the documented finding,
+which is the design described in the paper.
 
-### Leakage positive control
+### Answer-present control
 
-`run_leakage_experiment.py` uses the same pipeline but passes a full context that **includes** the target test result. The expected result is a ΔGT ≈ +1.94 over baseline (paper Extended Data Fig. 6b), confirming the metric detects context use and ruling out training-data memorization as an explanation for baseline scores.
+`run_leakage_experiment.py` uses the same pipeline but supplies a context that **includes**
+the target finding. Across 41 entries this raised GT similarity by +1.94 points
+(95% CI +1.50 to +2.38), showing that the pipeline responds to patient information supplied
+in context. It is not a test of training-data memorization, and it does not exclude
+memorization of published cases during pretraining.
 
 ---
 
 ## Setup
-
-### 1. Clone and install
 
 ```bash
 git clone https://github.com/moransorka1/clinical-finding-generation.git
 cd clinical-finding-generation
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-### 2. Configure credentials
-
-Copy `.env.example` to `.env` and fill in your keys:
-
-```bash
-cp .env.example .env
+cp .env.example .env    # then fill in your credentials
 ```
 
 ```dotenv
-# Google Vertex AI (Gemini 2.5 Pro, Gemma3 12B)
+# Google Vertex AI (Gemini 2.5 Pro)
 GOOGLE_CLOUD_PROJECT=your-project-id
 GOOGLE_CLOUD_LOCATION=us-central1
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
 
-# AWS Bedrock (Claude Sonnet 4.6, Qwen3 32B)
+# AWS Bedrock (Claude Sonnet 4.6, Gemma3 12B, Qwen3 32B)
 AWS_REGION=eu-west-1
 AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
-
-# Optional model overrides
-VERTEX_FLASH_MODEL=gemini-2.5-pro
 ```
 
-### 3. Database
-
-The pipeline reads case text and clinical data from a SQLite database.
-Place `cliniclue.db` in `db/` (not included in this repository — see Data Availability).
+The pipeline reads case text and clinical data from a SQLite database and from
+`data/ground_truth_<specialty>.json` files. Neither is included here, because both contain
+text from copyrighted published case reports. See Data Availability. The commands below
+therefore document the pipeline rather than run out of the box.
 
 ---
 
-## Running the Experiments
-
-### Baseline generation (reproduces paper Table 1 / Figs 2–5)
+## Running
 
 ```bash
-# Single case, 5 repetitions, Gemini 2.5 Pro
+# Baseline generation: single case, 5 repetitions, Gemini 2.5 Pro
 python src/scripts/run_full_experiment.py \
     --ground-truth-file data/ground_truth_neurology.json \
     --case-ids 1 --repetitions 5 --model gemini-2.5-pro
 
-# All neurology cases, all models
+# Baseline generation: all cases in a specialty, all four models
 for MODEL in gemini-2.5-pro eu.anthropic.claude-sonnet-4-6 google.gemma-3-12b-it qwen.qwen3-32b-v1:0; do
   python src/scripts/run_full_experiment.py \
       --ground-truth-file data/ground_truth_neurology.json \
       --repetitions 5 --model $MODEL
 done
-```
 
-### Multi-judge evaluation (reproduces Fig. 4 / Extended Data Fig. 5)
-
-```bash
-# Re-evaluate all generator outputs with all 4 judge models
+# Multi-judge evaluation
 python src/scripts/run_judge_evaluations.py \
     --generators gemini-2.5-pro sonnet-4.6 gemma-3-12b qwen3-32b \
     --specialties neurology_neurosurgery cardiology \
     --judges gemini-2.5-pro sonnet-4.6 gemma-3-12b qwen3-32b
-```
 
-### Leakage positive control (reproduces Extended Data Fig. 6)
-
-```bash
+# Answer-present control
 python src/leakage_experiment/run_leakage_experiment.py \
     --ground-truth-file data/ground_truth_neurology.json \
     --case-ids 1 2 3 4 5 --repetitions 5 --model gemini-2.5-pro
-
-# Merge and compare against baseline
 python src/leakage_experiment/merge_leakage_csvs.py
 python src/leakage_experiment/compare_experiments.py \
     --report output_leakage/comparison_report.md --charts
@@ -174,51 +155,68 @@ python src/leakage_experiment/compare_experiments.py \
 
 ---
 
-## Prompt Templates
+## Prompts
 
-The exact prompts used in the paper are documented in `docs/prompts.txt` (LaTeX source for Supplementary Note 3). In code they map to:
+All five prompts are reproduced verbatim in Supplementary Note 3 of the paper. In code they
+map to:
 
-| Prompt | Code location | Paper reference |
-|--------|---------------|-----------------|
-| Stage 1 generation | `synthetic_response_generator._step1_generate_realistic_results` | Supplementary Note 3, Stage 1 |
-| Stage 2 sanitization | `synthetic_response_generator._step2_format_and_sanitize` | Supplementary Note 3, Stage 2 |
-| GT similarity + leakage | `metrics._evaluate_similarity_with_llm` | Supplementary Note 3, Ground-truth similarity prompt |
-| Clinical plausibility | `metrics._evaluate_plausibility_with_llm` | Supplementary Note 3, Clinical plausibility prompt |
-| Numeric extraction | `metrics._extract_numeric_from_both_with_llm` | Supplementary Note 3 / Supplementary Note 2 |
+| Prompt | Code location |
+|--------|---------------|
+| Stage 1 generation | `synthetic_response_generator._step1_generate_realistic_results` |
+| Stage 2 sanitization | `synthetic_response_generator._step2_format_and_sanitize` |
+| Ground-truth similarity | `metrics._evaluate_similarity_with_llm` |
+| Clinical plausibility | `metrics._evaluate_plausibility_with_llm` |
+| Numeric extraction | `metrics._extract_numeric_from_both_with_llm` |
+
+Decoding parameters and per-stage call counts are in Supplementary Note 2.
 
 ---
 
-## Models Used
+## Models
 
-| Model | Provider | API |
-|-------|----------|-----|
-| Gemini 2.5 Pro (`gemini-2.5-pro`) | Google DeepMind | Vertex AI |
+| Model | Provider | Serving platform |
+|-------|----------|------------------|
+| Gemini 2.5 Pro (`gemini-2.5-pro`) | Google DeepMind | Google Vertex AI |
 | Claude Sonnet 4.6 (`eu.anthropic.claude-sonnet-4-6`) | Anthropic | AWS Bedrock |
 | Gemma3 12B (`google.gemma-3-12b-it`) | Google | AWS Bedrock |
 | Qwen3 32B (`qwen.qwen3-32b-v1:0`) | Alibaba | AWS Bedrock |
+
+All four served as both generator and judge. Generation used temperature 0.3.
 
 ---
 
 ## Data Availability
 
-The 127-case corpus, ground-truth JSON files, and the SQLite database are not included in this repository because they derive from copyrighted published case reports. The ground-truth JSON files and the database schema will be made available upon reasonable request to the corresponding author (s_shelly@rambam.health.gov.il), subject to any applicable data-sharing agreements.
+The score-level data underlying the reported analyses are deposited at Zenodo:
+<https://doi.org/10.5281/zenodo.21165186>. This includes the 117,251 individual judge
+evaluations, the per-output scores, entry-level metadata, the numeric-extraction
+comparisons, the physician plausibility ratings and the control data.
+
+The 127 source case reports are copyrighted publications and cannot be redistributed, so
+the deposit contains no case-report text and neither does this repository. Full citations
+for all 127 cases are given in Supplementary Data 1 and in the deposit, so the originals
+can be obtained from the publishers.
 
 ---
 
 ## Citation
 
-If you use this code, please cite:
-
 ```bibtex
-@unpublished{sorka2025clinical,
-  title  = {Clinical text from large language models describes diseases, not patients},
-  author = {Sorka, Moran and Shalat, Adham and Abu Husei, Ram and
+@unpublished{sorka2026clinical,
+  title  = {Clinical plausibility does not establish patient fidelity in
+            generated clinical findings},
+  author = {Sorka, Moran and Shalata, Adham and Husein, Ram Abu and
             Goldstein, Ariel and Aran, Dvir and Shelly, Shahar},
+  year   = {2026},
+  note   = {Manuscript under review},
 }
 ```
+
+Data deposit: Sorka M, Shalata A, Husein RA, Goldstein A, Aran D, Shelly S.
+Zenodo. <https://doi.org/10.5281/zenodo.21165186>
 
 ---
 
 ## License
 
-MIT
+MIT. See `LICENSE`.
